@@ -78,9 +78,10 @@ async function main() {
       keys: [
         { pubkey: targetAccount.publicKey, isSigner: true, isWritable: true },
         { pubkey: initAuthority, isSigner: true, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
       programId: new PublicKey(program.idl.address),
-      data: Buffer.from(program.idl.instructions[1].discriminator), // The index or discriminator of the instruction
+      data: Buffer.from(program.idl.instructions[1].discriminator), // The discriminator of the instruction
     })
   );
 
