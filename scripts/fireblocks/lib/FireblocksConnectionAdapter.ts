@@ -268,6 +268,10 @@ export class FireblocksConnectionAdapter extends Connection {
 
       if (signers && Array.isArray(signers)) {
         for (const signer of signers) {
+          if (signer.publicKey.equals(new PublicKey(this.account))) {
+            this.logger.debug('Signer is the fee payer, skipping signing');
+            break;
+          }
           if (transaction instanceof Transaction) {
             transaction.partialSign(signer);
           } else {
