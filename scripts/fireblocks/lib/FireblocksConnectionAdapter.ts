@@ -195,7 +195,7 @@ export class FireblocksConnectionAdapter extends Connection {
         throw new Error('Transaction is required');
       }
 
-      const serializedTx = transaction.serialize({ requireAllSignatures: false });
+      const serializedTx = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
             
       const payload: TransactionArguments = {
         assetId: this.assetId,

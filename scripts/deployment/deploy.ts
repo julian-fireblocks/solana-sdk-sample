@@ -12,6 +12,8 @@ import {
     Commitment,
 } from "@solana/web3.js";
 
+import { Connection as PublicConnection } from "@solana/web3.js"; 
+
 import {
     FireblocksConnectionAdapter,
     FireblocksConnectionAdapterConfig,
@@ -22,53 +24,59 @@ import fs from "fs";
 require("dotenv").config();
 
 const BPF_LOADER_UPGRADEABLE_ID = "BPFLoaderUpgradeab1e11111111111111111111111";
-const PROGRAM_ACCOUNT_SPACE = "UpgradeableLoaderState::Program";
+const PROGRAM_ACCOUNT_SPACE = 44;// 44 bytes for program account, prevously 36
+const secretKeyFile = Uint8Array.from(JSON.parse(fs.readFileSync(process.env.LOCAL_SECRET_PAYER, "utf8")));
+const secretKey = Keypair.fromSecretKey(secretKeyFile);
 
-// BPF Function 1
-// https://github.com/solana-labs/solana/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L30
-// function encodeWriteInstruction(offset, data) {
-//     const WRITE_INSTRUCTION = 1; // Enum 1 = Write
-//     const layout = Buffer.alloc(8 + data.length + 1);
-//     layout.writeUInt8(WRITE_INSTRUCTION, 0); // Write enum
-//     layout.writeUInt32LE(offset, 1); // Offset
-//     layout.writeUInt32LE(0, 5); // Padding (some tools use this)
-//     data.copy(layout, 9); // Copy data in
-//     return layout;
-// }
+const bufferAccountKeypair = Uint8Array.from(
+    JSON.parse(fs.readFileSync(process.env.BUFFER_ACCOUNT, "utf8"))
+);
+const bufferKeypair = Keypair.fromSecretKey(bufferAccountKeypair);
+
+const programAccountKeypairFile = Uint8Array.from(
+    JSON.parse(fs.readFileSync(process.env.PROGRAM_ACCOUNT, "utf8"))
+);
+const programAccountKeypair = Keypair.fromSecretKey(programAccountKeypairFile);
+
+
+const publicConnection = new PublicConnection(
+    clusterApiUrl("devnet"),
+    "confirmed" as Commitment
+);
 
 // BPF Function 1
 // updated for correct padding/ serialization
 function encodeWriteInstruction(offset: number, data: Buffer): Buffer {
-    const discriminator = 1;
-    const dataLen = BigInt(data.length);
-
-    const buf = Buffer.alloc(1 + 4 + 8 + data.length);
-    let offsetPos = 0;
-    buf.writeUInt8(discriminator, offsetPos); offsetPos += 1;
-    buf.writeUInt32LE(offset, offsetPos); offsetPos += 4;
-    buf.writeBigUInt64LE(dataLen, offsetPos); offsetPos += 8;
-    data.copy(buf, offsetPos);
-
-    return buf;
+    // Use u32 little-endian discriminator for Write instruction (1)
+    const discriminator = Buffer.from([1, 0, 0, 0]); // Write enum variant as little-endian u32
+    
+    // Serialize the offset as u32 little-endian
+    const offsetBuffer = Buffer.alloc(4);
+    offsetBuffer.writeUInt32LE(offset, 0);
+    
+    // Serialize the data length as u64 little-endian
+    const dataLenBuffer = Buffer.alloc(8);
+    dataLenBuffer.writeBigUInt64LE(BigInt(data.length), 0);
+    
+    // Combine all parts
+    return Buffer.concat([
+        discriminator,  // 4 bytes
+        offsetBuffer,   // 4 bytes
+        dataLenBuffer,  // 8 bytes
+        data            // variable length
+    ]);
 }
 
-
-// BPF Function 2
 const encodeDeployWithMaxDataLenInstruction = (bufferSize: number) => {
-    // Data array: [discriminator, max_data_len (u32)]
-
-    // Rust apparently uses u64 (8 bytes) for max_data_len
-    const maxDataLen = BigInt(bufferSize);
-    const maxDataLenBuffer = Buffer.alloc(8);
-    maxDataLenBuffer.writeBigUInt64LE(maxDataLen, 0);
-    const data = Buffer.concat([Buffer.from([2]), maxDataLenBuffer]);
+    // Discriminator for DeployWithMaxDataLen (2) as u32 LE
+    const discriminator = Buffer.from([2, 0, 0, 0]);
     
-    // Initial testing with 4 byte buffer size
-    // const data = [
-    //     2, // Instruction enum value for DeployWithMaxDataLen
-    //     ...Buffer.from(new Uint32Array([bufferSize])), // max_data_len (4 bytes)
-    // ];
-    return Buffer.from(data);
+    // // max_data_len as BigInt (u64/usize on 64-bit)
+    const maxDataLenBuffer = Buffer.alloc(8);
+    maxDataLenBuffer.writeBigUInt64LE(BigInt(bufferSize), 0);
+    
+    // Combine both parts (12 bytes total)
+    return Buffer.concat([discriminator, maxDataLenBuffer]);
 };
 
 async function deployProgram() {
@@ -98,13 +106,8 @@ async function deployProgram() {
     const payerPublicKey = new PublicKey(connection.getAccount());
     console.log("Deployer account:", payerPublicKey.toBase58());
 
-    // // Create a new keypair for the program
-    // const programKeypair = Keypair.generate();
-    // console.log("Program ID:", programKeypair.publicKey.toBase58());
-
     // Create a new keypair for the program account
     // TODO: Move to same transaction as deployWithMaxDataLen
-    const programAccountKeypair = Keypair.generate();
     console.log("Program Account:", programAccountKeypair.publicKey.toBase58());
     console.log(
         "Program Account Secret Key (json):",
@@ -139,11 +142,12 @@ async function deployProgram() {
     );
 
     try {
+        const bufferLamports = 0.1 * LAMPORTS_PER_SOL; // 0.1 SOL buffer
         // Calculate minimum balance for rent exemption
         const minimumBalanceForRentExemption =
             await connection.getMinimumBalanceForRentExemption(
                 programData.length
-            );
+            ) + bufferLamports;
         console.log(
             `Minimum balance for rent exemption: ${
                 minimumBalanceForRentExemption / LAMPORTS_PER_SOL
@@ -153,11 +157,8 @@ async function deployProgram() {
         // Deploy the program
         console.log("Deploying program...");
 
-        // Note: BpfLoader.load requires a signer that we can't provide with Fireblocks
-        // Instead, we'll use a multi-step approach with individual transactions
-
         // 1. Create program account
-        const firstBlockhash = await connection.getLatestBlockhash();
+        const firstBlockhash = await connection.getLatestBlockhash({commitment: "confirmed"});
         const createAccountTransaction = new Transaction();
         createAccountTransaction.feePayer = payerPublicKey;
         createAccountTransaction.recentBlockhash = firstBlockhash.blockhash;
@@ -166,16 +167,15 @@ async function deployProgram() {
                 fromPubkey: payerPublicKey,
                 newAccountPubkey: programAccountKeypair.publicKey,
                 lamports: await connection.getMinimumBalanceForRentExemption(
-                    PROGRAM_ACCOUNT_SPACE.length
+                    PROGRAM_ACCOUNT_SPACE
                 ),
-                space: PROGRAM_ACCOUNT_SPACE.length,
+                space: PROGRAM_ACCOUNT_SPACE,
                 programId: new PublicKey(BPF_LOADER_UPGRADEABLE_ID),
             })
         );
 
         // Sign and send the create account transaction
         // Note: We need to sign with both the payer and the program account keypair
-        // Since Fireblocks can only sign with the payer, we'll use partialSign for the program account keypair
         createAccountTransaction.partialSign(programAccountKeypair);
 
         // Serialize the transaction with verifySignatures set to false
@@ -202,12 +202,14 @@ async function deployProgram() {
             JSON.stringify(Array.from(bufferKeypair.secretKey))
         );
 
-        const bufferSize = Math.ceil(programData.length / 1024) * 1024; // Round up to the nearest 1024 bytes
+        const bufferSize = Math.ceil((programData.length + 33) / 1024) * 1024; // 33 Bytes, 1 for state variable, 32 for authority
+        // Round up to the nearest 1024 bytes
 
-        const createBufferTransaction = new Transaction();
-        createBufferTransaction.feePayer = payerPublicKey;
-        createBufferTransaction.recentBlockhash = firstBlockhash.blockhash;
-        createBufferTransaction.add(
+        const createBufferAccountTransaction = new Transaction();
+        createBufferAccountTransaction.feePayer = payerPublicKey;
+        const secondBlockhash = await connection.getLatestBlockhash({commitment: "confirmed"});
+        createBufferAccountTransaction.recentBlockhash = secondBlockhash.blockhash;
+        createBufferAccountTransaction.add(
             SystemProgram.createAccount({
                 fromPubkey: payerPublicKey,
                 newAccountPubkey: bufferKeypair.publicKey,
@@ -218,6 +220,21 @@ async function deployProgram() {
                 programId: new PublicKey(BPF_LOADER_UPGRADEABLE_ID),
             })
         );
+
+        createBufferAccountTransaction.partialSign(bufferKeypair);
+        const createBufferAccountTxHash = await sendAndConfirmTransaction(
+            connection,
+            createBufferAccountTransaction,
+            [] // Empty array since Fireblocks will handle the payer signature
+        );
+        console.log(
+            `Buffer account created: https://explorer.solana.com/tx/${createBufferAccountTxHash}?cluster=devnet`
+        );
+
+        const createBufferTransaction = new Transaction();
+        createBufferTransaction.feePayer = secretKey.publicKey;
+        const thirdBlockhash = await connection.getLatestBlockhash({commitment: "confirmed"});
+        createBufferTransaction.recentBlockhash = thirdBlockhash.blockhash; 
         createBufferTransaction.add(
             //  https://github.com/solana-labs/solana/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L23
             new TransactionInstruction({
@@ -230,26 +247,32 @@ async function deployProgram() {
                     },
                     {
                         pubkey: payerPublicKey,
-                        isSigner: true,
+                        isSigner: false, // Fireblocks key, does not need to sign
                         isWritable: false,
                     },
                 ],
-                data: Buffer.from([0]), // Instruction (0 = InitializeBuffer) https://github.com/solana-labs/solana/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L23
+                data: Buffer.from([0, 0, 0, 0]) //Buffer.from("00", "hex") // This is a buffer with [0]
             })
         );
+        createBufferTransaction.sign(secretKey);
+        // createBufferTransaction.partialSign(bufferKeypair); 
 
         // Sign and send the create buffer transaction using fireblocks
         const serializedBufferTx = createBufferTransaction.serialize({
             verifySignatures: false,
+            requireAllSignatures: false,
         });
         console.log(
             "Serialized buffer transaction:",
             serializedBufferTx.toString("base64")
         );
+        console.log("Buffer keypair:", bufferKeypair.publicKey.toBase58());
+
+
         const createBufferTxHash = await sendAndConfirmTransaction(
-            connection,
+            publicConnection,
             createBufferTransaction,
-            [] // Empty array since Fireblocks will handle the payer signature
+            [secretKey] // TODO Remove this when Fireblocks is ready
         );
         console.log(
             `Buffer account created: https://explorer.solana.com/tx/${createBufferTxHash}?cluster=devnet`
@@ -280,9 +303,6 @@ async function deployProgram() {
         console.log(
             "Transaction confirmed, proceeding to write program data..."
         );
-        // sleep 5 minutes to ensure the transaction is confirmed and whitelist the address manually
-        await new Promise((resolve) => setTimeout(resolve, 5 * 60 * 1000));
-        console.log("Resuming after sleep...");
 
         // Calculate optimal chunk size to ensure it doesn't exceed transaction size limit
         const calculateOptimalChunkSize = (dataLength: number) => {
@@ -321,7 +341,7 @@ async function deployProgram() {
         console.log(`Total chunks needed: ${totalChunks}`);
         let chunkTxHash = ""; // Declare variable outside loop
 
-        for (let i = 0; i < totalChunks; i++) {
+        for (let i = 38; i < totalChunks; i++) {
             const offset = i * chunkSize;
             let chunk = programData.slice(offset, offset + chunkSize);
 
@@ -334,7 +354,7 @@ async function deployProgram() {
             const chunkTransaction = new Transaction();
             chunkTransaction.feePayer = payerPublicKey;
             chunkTransaction.recentBlockhash = (
-                await connection.getLatestBlockhash()
+                await connection.getLatestBlockhash({commitment: "confirmed"})
             ).blockhash;
 
             // Optimize instruction data structure - use let declaration for possible later modifications
@@ -361,7 +381,7 @@ async function deployProgram() {
 
             try {
                 console.log("Signing chunk transaction...");
-                chunkTransaction.partialSign(programAccountKeypair);
+                // chunkTransaction.partialSign(programAccountKeypair); // only the authority needs to sign
 
                 // fee estimation
                 const feeCalculator = await connection.getFeeForMessage(
@@ -421,7 +441,6 @@ async function deployProgram() {
                         }/${maxRetries})...`
                     );
                     try {
-                        chunkTransaction.partialSign(programAccountKeypair);
                         chunkTxHash = await sendAndConfirmTransaction(
                             connection,
                             chunkTransaction,
@@ -474,11 +493,9 @@ async function deployProgram() {
         const finalizeTransaction = new Transaction();
         finalizeTransaction.feePayer = payerPublicKey;
         finalizeTransaction.recentBlockhash = (
-            await connection.getLatestBlockhash()
+            await connection.getLatestBlockhash({commitment: "confirmed"})
         ).blockhash;
         // BpfLoader.finalize method doesn't exist, need to create custom instruction
-        const finalizeData = Buffer.alloc(4);
-        finalizeData.writeUInt32LE(1, 0); // Write instruction (1 = Finalize)
 
         finalizeTransaction.add(
             new TransactionInstruction({
@@ -527,24 +544,6 @@ async function deployProgram() {
                 ],
                 data: encodeDeployWithMaxDataLenInstruction(bufferSize), // Pass the buffer size
             })
-            // new TransactionInstruction({
-            //   keys: [
-            //     {
-            //       pubkey: programAccountKeypair.publicKey,
-            //       isSigner: true,
-            //       isWritable: true,
-            //     },
-            //     {
-            //       pubkey: new PublicKey(
-            //         "SysvarRent111111111111111111111111111111111"
-            //       ),
-            //       isSigner: false,
-            //       isWritable: false,
-            //     },
-            //   ],
-            //   programId: TOKEN_2022_PROGRAM_ID,
-            //   data: finalizeData,
-            // })
         );
 
         // Sign with program keypair since it's a required signer
