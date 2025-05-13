@@ -194,7 +194,6 @@ async function deployProgram() {
         );
 
         // 1b. Create buffer account
-        const bufferKeypair = Keypair.generate();
         console.log("Buffer Keypair:", bufferKeypair.publicKey.toBase58());
 
         console.log(
