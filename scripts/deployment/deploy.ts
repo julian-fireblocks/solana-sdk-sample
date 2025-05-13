@@ -267,7 +267,7 @@ async function deployProgram() {
 
 
         const createBufferTxHash = await sendAndConfirmTransaction(
-            publicConnection,
+            connection,
             createBufferTransaction,
             []
         );
