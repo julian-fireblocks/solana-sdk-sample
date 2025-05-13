@@ -338,7 +338,7 @@ async function deployProgram() {
         console.log(`Total chunks needed: ${totalChunks}`);
         let chunkTxHash = ""; // Declare variable outside loop
 
-        for (let i = 38; i < totalChunks; i++) {
+        for (let i = 0; i < totalChunks; i++) {
             const offset = i * chunkSize;
             let chunk = programData.slice(offset, offset + chunkSize);
 
@@ -354,7 +354,7 @@ async function deployProgram() {
                 await connection.getLatestBlockhash({commitment: "confirmed"})
             ).blockhash;
 
-            // Optimize instruction data structure - use let declaration for possible later modifications
+            // TODO: Switch to Promise.all for parallel processing, since offset is not dependent on previous chunk
             let currentChunk = chunk;
             let data = encodeWriteInstruction(offset, currentChunk); // enum 0
             chunkTransaction.add(
