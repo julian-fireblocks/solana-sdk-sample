@@ -232,7 +232,7 @@ async function deployProgram() {
         );
 
         const createBufferTransaction = new Transaction();
-        createBufferTransaction.feePayer = secretKey.publicKey;
+        createBufferTransaction.feePayer = payerPublicKey;
         const thirdBlockhash = await connection.getLatestBlockhash({commitment: "confirmed"});
         createBufferTransaction.recentBlockhash = thirdBlockhash.blockhash; 
         createBufferTransaction.add(
@@ -247,15 +247,13 @@ async function deployProgram() {
                     },
                     {
                         pubkey: payerPublicKey,
-                        isSigner: false, // Fireblocks key, does not need to sign
+                        isSigner: false,
                         isWritable: false,
                     },
                 ],
-                data: Buffer.from([0, 0, 0, 0]) //Buffer.from("00", "hex") // This is a buffer with [0]
+                data: Buffer.from([0, 0, 0, 0]) // Discriminator for Buffer (0) - Initialize Buffer
             })
         );
-        createBufferTransaction.sign(secretKey);
-        // createBufferTransaction.partialSign(bufferKeypair); 
 
         // Sign and send the create buffer transaction using fireblocks
         const serializedBufferTx = createBufferTransaction.serialize({
@@ -272,7 +270,7 @@ async function deployProgram() {
         const createBufferTxHash = await sendAndConfirmTransaction(
             publicConnection,
             createBufferTransaction,
-            [secretKey] // TODO Remove this when Fireblocks is ready
+            []
         );
         console.log(
             `Buffer account created: https://explorer.solana.com/tx/${createBufferTxHash}?cluster=devnet`
@@ -381,7 +379,6 @@ async function deployProgram() {
 
             try {
                 console.log("Signing chunk transaction...");
-                // chunkTransaction.partialSign(programAccountKeypair); // only the authority needs to sign
 
                 // fee estimation
                 const feeCalculator = await connection.getFeeForMessage(
@@ -495,7 +492,6 @@ async function deployProgram() {
         finalizeTransaction.recentBlockhash = (
             await connection.getLatestBlockhash({commitment: "confirmed"})
         ).blockhash;
-        // BpfLoader.finalize method doesn't exist, need to create custom instruction
 
         finalizeTransaction.add(
             new TransactionInstruction({
@@ -550,8 +546,6 @@ async function deployProgram() {
         let finalizeTxHash;
         try {
             console.log("Signing finalize transaction...");
-            // finalizeTransaction.partialSign(programAccountKeypair);
-            // console.log("Finalize transaction signed successfully");
 
             finalizeTxHash = await sendAndConfirmTransaction(
                 connection,
