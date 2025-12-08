@@ -207,7 +207,8 @@ export class FireblocksConnectionAdapter extends Connection {
         },
         note: this.txNote || "Created by Solana Web3 Adapter",
         extraParameters: {
-          programCallData: Buffer.from(serializedTx).toString("base64")
+          programCallData: Buffer.from(serializedTx).toString("base64"),
+          useDurableNonce: true,
         }
       };
 
