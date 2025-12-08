@@ -4,7 +4,7 @@ import {
     createFreezeAccountInstruction,
     TOKEN_2022_PROGRAM_ID 
 } from "@solana/spl-token";
-import { clusterApiUrl, Commitment, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import { clusterApiUrl, Commitment, ComputeBudgetProgram, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
 import * as FireblocksSDK from "../fireblocks/lib";
 
 const fireblocksConnectionConfig: FireblocksSDK.FireblocksConnectionAdapterConfig =
@@ -63,8 +63,18 @@ async function main() {
         TOKEN_2022_PROGRAM_ID
     );
 
+    const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
+        units: 400000, // Adjust as necessary
+    });
+
+    const computeLimitIx = ComputeBudgetProgram.setComputeUnitPrice({
+        microLamports: 10, // Adjust as necessary
+    });
+
     // Create transaction with all three instructions
     const tx = new Transaction().add(
+        computeBudgetIx,
+        computeLimitIx,
         thawInstruction,
         transferInstruction,
         freezeInstruction
